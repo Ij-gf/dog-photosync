@@ -3,7 +3,6 @@ package com.autoshot.app.data
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
@@ -17,6 +16,9 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 
 const val DEFAULT_INTERVAL_MS: Long = 30 * 60 * 1000L
 
+/** 隐私告知版本；文案有实质变化时 +1，用户需重新确认 */
+const val CONSENT_VERSION = 1
+
 data class AppSettings(
     /** 相册增量扫描水位线，DATE_ADDED（秒） */
     val lastScanAt: Long = 0L,
@@ -27,8 +29,10 @@ data class AppSettings(
     val maxRows: Int = 500,
     /** 已同步记录保留天数 */
     val retentionDays: Int = 30,
-    /** 是否已明确知晓用途（首次启动的一次性授权确认） */
-    val consentGranted: Boolean = false,
+    /** 已同意的隐私政策版本；0 表示未同意。政策升级后需重新同意 */
+    val consentVersion: Int = 0,
+    /** 同意时间（毫秒） */
+    val consentAt: Long = 0L,
     val supabaseEmail: String? = null,
     val supabaseToken: String? = null,
     val supabaseUserId: String? = null,
@@ -44,7 +48,8 @@ class SettingsStore(private val context: Context) {
         val REPEAT_INTERVAL = longPreferencesKey("repeat_interval_ms")
         val MAX_ROWS = intPreferencesKey("max_rows")
         val RETENTION_DAYS = intPreferencesKey("retention_days")
-        val CONSENT = booleanPreferencesKey("consent_granted")
+        val CONSENT_VERSION = intPreferencesKey("consent_version")
+        val CONSENT_AT = longPreferencesKey("consent_at")
         val SUPA_EMAIL = stringPreferencesKey("supabase_email")
         val SUPA_TOKEN = stringPreferencesKey("supabase_token")
         val SUPA_USER = stringPreferencesKey("supabase_user_id")
@@ -59,7 +64,8 @@ class SettingsStore(private val context: Context) {
             repeatIntervalMs = p[Keys.REPEAT_INTERVAL] ?: DEFAULT_INTERVAL_MS,
             maxRows = p[Keys.MAX_ROWS] ?: 500,
             retentionDays = p[Keys.RETENTION_DAYS] ?: 30,
-            consentGranted = p[Keys.CONSENT] ?: false,
+            consentVersion = p[Keys.CONSENT_VERSION] ?: 0,
+            consentAt = p[Keys.CONSENT_AT] ?: 0L,
             supabaseEmail = p[Keys.SUPA_EMAIL],
             supabaseToken = p[Keys.SUPA_TOKEN],
             supabaseUserId = p[Keys.SUPA_USER],
@@ -92,8 +98,19 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit { it[Keys.RETENTION_DAYS] = value }
     }
 
-    suspend fun setConsent(value: Boolean) {
-        context.dataStore.edit { it[Keys.CONSENT] = value }
+    suspend fun setConsent(version: Int) {
+        context.dataStore.edit {
+            it[Keys.CONSENT_VERSION] = version
+            it[Keys.CONSENT_AT] = System.currentTimeMillis()
+        }
+    }
+
+    /** 撤回同意：停止采集，并清掉同意记录（下次进入需重新同意） */
+    suspend fun clearConsent() {
+        context.dataStore.edit {
+            it.remove(Keys.CONSENT_VERSION)
+            it.remove(Keys.CONSENT_AT)
+        }
     }
 
     suspend fun setAuth(email: String?, token: String?, userId: String?) {

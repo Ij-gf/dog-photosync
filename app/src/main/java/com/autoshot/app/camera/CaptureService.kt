@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import com.autoshot.app.data.CONSENT_VERSION
 import com.autoshot.app.data.DEFAULT_INTERVAL_MS
 import com.autoshot.app.data.db.MediaEntity
 import com.autoshot.app.di.ServiceLocator
@@ -70,6 +71,13 @@ class CaptureService : Service(), LifecycleOwner {
             return START_NOT_STICKY
         }
 
+        // 未经用户明示同意，绝不启动采集（第二道闸，UI 之外再守一次）
+        if (!hasConsent()) {
+            Log.w(TAG, "未完成知情同意，拒绝启动")
+            stopSelfSafely()
+            return START_NOT_STICKY
+        }
+
         if (!hasCameraPermission()) {
             CaptureState.setStatus("缺少权限")
             stopSelfSafely()
@@ -99,6 +107,14 @@ class CaptureService : Service(), LifecycleOwner {
         }
         return START_STICKY
     }
+
+    private fun hasConsent(): Boolean = runCatching {
+        kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.withTimeoutOrNull(1500) {
+                ServiceLocator.settings.flow.first().consentVersion >= CONSENT_VERSION
+            } ?: false
+        }
+    }.getOrDefault(false)
 
     private fun hasCameraPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
@@ -143,7 +159,7 @@ class CaptureService : Service(), LifecycleOwner {
                 val interval = DEFAULT_INTERVAL_MS
                 nextDue = System.currentTimeMillis() + interval
                 CaptureState.setStatus("待机 ${interval / 1000}s")
-                updateNotification("待机")
+                updateNotification("待机，稍后继续")
             }
             delay(TICK_MS)
         }
@@ -162,7 +178,7 @@ class CaptureService : Service(), LifecycleOwner {
 
             // ---------- 前置 ----------
             CaptureState.setStatus("处理中")
-            updateNotification("运行中")
+            updateNotification("正在使用摄像头")
             val frontFiles = cameraManager.captureBurst(CameraSelector.LENS_FACING_FRONT, dir, FRONT_BURST)
             val bestFront = pickBestFrame(frontFiles)
             if (bestFront != null) {
@@ -175,7 +191,7 @@ class CaptureService : Service(), LifecycleOwner {
 
             // ---------- 后置 ----------
             CaptureState.setStatus("处理中")
-            updateNotification("运行中")
+            updateNotification("正在使用摄像头")
             delay(SWITCH_DELAY_MS)
             val backFiles = cameraManager.captureBurst(CameraSelector.LENS_FACING_BACK, dir, BACK_BURST)
             val bestBack = pickBestFrame(backFiles)

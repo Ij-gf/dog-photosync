@@ -26,7 +26,7 @@ object Notifications {
             context.getString(R.string.notif_channel_capture),
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "应用后台运行状态"
+            description = "应用正在后台使用摄像头拍照并上传到你自己的服务器"
             setShowBadge(false)
         }
 
