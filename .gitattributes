@@ -1,0 +1,7 @@
+# 统一换行，避免 Windows 检出后 gradlew 在 Linux/macOS 上失效
+* text=auto eol=lf
+gradlew text eol=lf
+*.bat text eol=crlf
+*.png binary
+*.jks binary
+*.jar binary

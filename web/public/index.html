@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>小狗</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐶</text></svg>">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand">
+    <span class="dot"></span>
+    <h1>小狗</h1>
+  </div>
+  <div class="meta">
+    <span id="count">—</span>
+    <button id="refresh" title="刷新">刷新</button>
+  </div>
+</header>
+
+<main id="grid" class="grid" aria-live="polite"></main>
+
+<div id="empty" class="empty" hidden>还没有照片</div>
+<div id="sentinel" class="sentinel"></div>
+<div id="loader" class="loader" hidden></div>
+
+<div id="notice" class="notice" hidden></div>
+
+<div id="lightbox" class="lightbox" hidden>
+  <button class="close" id="close" aria-label="关闭">×</button>
+  <img id="bigimg" alt="">
+  <div class="actions">
+    <a id="download" class="btn" download>下载</a>
+    <span id="info" class="info"></span>
+  </div>
+</div>
+
+<script src="/app.js" type="module"></script>
+</body>
+</html>

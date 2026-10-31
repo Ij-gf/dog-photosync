@@ -1,0 +1,12 @@
+# 复制为 local.properties 后按需填写（local.properties 已被 .gitignore 忽略，不会提交）
+# 这些值会通过 BuildConfig 编进 APK，改完要重新编译
+
+sdk.dir=/path/to/Android/Sdk
+
+# Supabase 项目地址与匿名密钥（Project Settings → API）
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-anon-key
+
+# 可选：填了 App 会静默登录，上传的行带 user_id（RLS 可只放行本人）
+SUPABASE_EMAIL=
+SUPABASE_PASSWORD=

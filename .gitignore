@@ -1,0 +1,29 @@
+# ---- Gradle / 构建产物 ----
+.gradle/
+.gradle-home/
+build/
+app/build/
+*.apk
+*.aab
+build.log
+.kotlin/
+
+# ---- IDE ----
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# ---- 本地配置与密钥（绝不提交）----
+local.properties
+.env
+web/.env
+keystore/
+*.jks
+*.keystore
+
+# ---- 其它 ----
+dist/
+.DS_Store
+Thumbs.db

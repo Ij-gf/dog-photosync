@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">小狗</string>
+    <string name="notif_channel_capture">运行状态</string>
+</resources>
