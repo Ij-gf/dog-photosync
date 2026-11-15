@@ -12,6 +12,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 忽略电池优化：系统弹窗授权后，后台服务不易被省电策略回收 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- 相册读取 -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <!-- Android 14+ 部分照片授权 -->
@@ -54,6 +57,14 @@
             android:exported="false"
             android:foregroundServiceType="camera" />
 
+        <!-- 开机恢复同步（不启动相机：Android 14+ 禁止后台拉起 camera 前台服务） -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

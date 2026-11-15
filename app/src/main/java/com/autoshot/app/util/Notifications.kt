@@ -14,28 +14,38 @@ import com.autoshot.app.ui.MainActivity
 
 object Notifications {
 
-    const val CHANNEL_CAPTURE = "capture"
+    // v2：老通道的重要性一旦创建就改不动，换 id 重建才能降到最低档
+    const val CHANNEL_CAPTURE = "capture_v2"
+    const val LEGACY_CHANNEL_CAPTURE = "capture"
     const val CAPTURE_NOTIFICATION_ID = 1001
 
     fun createChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
+        // 删掉旧通道（其用户设置一并清除），避免残留可见性更高的旧设置
+        runCatching { nm.deleteNotificationChannel(LEGACY_CHANNEL_CAPTURE) }
+
         val capture = NotificationChannel(
             CHANNEL_CAPTURE,
             context.getString(R.string.notif_channel_capture),
-            NotificationManager.IMPORTANCE_LOW
+            NotificationManager.IMPORTANCE_MIN
         ).apply {
-            description = "应用正在后台使用摄像头拍照并上传到你自己的服务器"
+            description = "后台运行状态"
             setShowBadge(false)
+            setSound(null, null)
+            enableVibration(false)
+            enableLights(false)
+            lockscreenVisibility = Notification.VISIBILITY_PRIVATE
         }
 
         nm.createNotificationChannel(capture)
     }
 
     /**
-     * 前台服务通知。按规范必须是「用户可见、不可静默隐藏」的常驻通知，
-     * 不做隐藏图标 / 伪装通知等规避系统提示的处理。
+     * 前台服务通知：系统强制要求存在，这里只压到"最低可见"档——
+     * 不弹横幅、不响铃、不显示状态栏图标、无角标，折叠在通知栏底部。
+     * 不做隐藏图标 / 伪装成系统应用之类的规避处理。
      */
     fun captureNotification(context: Context, text: String): Notification {
         val openIntent = PendingIntent.getActivity(
@@ -59,7 +69,9 @@ object Notifications {
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setShowWhen(false)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setContentIntent(openIntent)
             .addAction(0, "停止", stopIntent)
             .build()

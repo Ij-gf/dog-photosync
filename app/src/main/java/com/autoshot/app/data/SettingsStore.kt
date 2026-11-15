@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "autoshot_settings")
 
-const val DEFAULT_INTERVAL_MS: Long = 30 * 60 * 1000L
+const val DEFAULT_INTERVAL_MS: Long = 60 * 1000L
 
 /** 隐私告知版本；文案有实质变化时 +1，用户需重新确认 */
 const val CONSENT_VERSION = 1

@@ -1,6 +1,5 @@
 package com.autoshot.app.data.db
 
-import androidx.paging.PagingSource
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -68,23 +67,13 @@ interface MediaDao {
     @Query("SELECT id, source, w, h, capturedAt, synced, status, thumbPath, bucketName, sizeBytes FROM media ORDER BY capturedAt DESC LIMIT :limit")
     fun recent(limit: Int): Flow<List<MediaSummary>>
 
-    // ---------------- 相册 / 分页 ----------------
-
-    @Query("SELECT * FROM media WHERE source = 'album' ORDER BY capturedAt DESC")
-    fun albumPagingSource(): PagingSource<Int, MediaEntity>
-
-    @Query("SELECT * FROM media WHERE source = 'album' AND (:bucket IS NULL OR bucketName = :bucket) ORDER BY capturedAt DESC")
-    fun albumPagingSource(bucket: String?): PagingSource<Int, MediaEntity>
+    // ---------------- 相册分组 ----------------
 
     @Query("SELECT DISTINCT bucketName FROM media WHERE source = 'album' AND bucketName IS NOT NULL ORDER BY bucketName")
     fun buckets(): Flow<List<String>>
 
     @Query("SELECT EXISTS(SELECT 1 FROM media WHERE dedupeKey = :key)")
     suspend fun exists(key: String): Boolean
-
-    /** 该 MediaStore 条目是否已入库（用于跳过「我们自己导出到相册」的那张） */
-    @Query("SELECT EXISTS(SELECT 1 FROM media WHERE uri = :uri)")
-    suspend fun existsByUri(uri: String): Boolean
 
     // ---------------- 容量控制 ----------------
 

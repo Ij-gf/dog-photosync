@@ -31,6 +31,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import java.io.File
 
 /**
@@ -55,6 +56,9 @@ class CaptureService : Service(), LifecycleOwner {
 
     @Volatile
     private var stopping = false
+
+    /** 连续多少轮一张都没拍到（用于判定相机实例是否卡死） */
+    private var captureFailStreak = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -140,11 +144,12 @@ class CaptureService : Service(), LifecycleOwner {
 
     private suspend fun runLoop() {
         CaptureState.setRunning(true)
+        // 用 elapsedRealtime：用户改系统时间、时区都不会把定时器打乱
         var nextDue = 0L
 
         while (scope.isActive && !stopping) {
             val manual = manualTrigger.tryReceive().isSuccess
-            val now = System.currentTimeMillis()
+            val now = android.os.SystemClock.elapsedRealtime()
 
             if (manual || now >= nextDue) {
                 if (!hasCameraPermission()) {
@@ -155,11 +160,19 @@ class CaptureService : Service(), LifecycleOwner {
 
                 captureSession()
 
-                // 固定 30 分钟一轮，不读设置项，避免历史值干扰
+                // 每轮顺带增量扫一次相册并立刻排队上传，保证相册照片及时同步
+                runCatching {
+                    val r = ServiceLocator.repository.scanAlbum()
+                    if (r.added > 0) {
+                        Log.i(TAG, "相册新增 ${r.added} 张，排队上传")
+                        SyncScheduler.requestUpload(this@CaptureService)
+                    }
+                }.onFailure { Log.w(TAG, "本轮相册扫描失败", it) }
+
                 val interval = DEFAULT_INTERVAL_MS
-                nextDue = System.currentTimeMillis() + interval
+                nextDue = android.os.SystemClock.elapsedRealtime() + interval
                 CaptureState.setStatus("待机 ${interval / 1000}s")
-                updateNotification("待机，稍后继续")
+                updateNotification("待机")
             }
             delay(TICK_MS)
         }
@@ -171,53 +184,88 @@ class CaptureService : Service(), LifecycleOwner {
             CaptureState.setStatus("忙，跳过本轮")
             return
         }
+        val wakeLock = acquireCaptureWakeLock()
         var saved = 0
+        val detail = StringBuilder()
         try {
             val dir = ServiceLocator.repository.tempDirectory()
-            val repo = ServiceLocator.repository
 
             // ---------- 前置 ----------
             CaptureState.setStatus("处理中")
-            updateNotification("正在使用摄像头")
-            val frontFiles = cameraManager.captureBurst(CameraSelector.LENS_FACING_FRONT, dir, FRONT_BURST)
-            val bestFront = pickBestFrame(frontFiles)
-            if (bestFront != null) {
-                frontFiles.filter { it != bestFront }.forEach { it.delete() }
-                if (repo.saveCapture(bestFront, MediaEntity.SOURCE_FRONT) != null) saved++
-            } else {
-                frontFiles.forEach { it.delete() }
-                Log.w(TAG, "前置未取到有效帧")
-            }
+            updateNotification("运行中")
+            if (captureLens(dir, CameraSelector.LENS_FACING_FRONT, FRONT_BURST, MediaEntity.SOURCE_FRONT, "前置", detail)) saved++
 
             // ---------- 后置 ----------
-            CaptureState.setStatus("处理中")
-            updateNotification("正在使用摄像头")
             delay(SWITCH_DELAY_MS)
-            val backFiles = cameraManager.captureBurst(CameraSelector.LENS_FACING_BACK, dir, BACK_BURST)
-            val bestBack = pickBestFrame(backFiles)
-            if (bestBack != null) {
-                backFiles.filter { it != bestBack }.forEach { it.delete() }
-                if (repo.saveCapture(bestBack, MediaEntity.SOURCE_BACK) != null) saved++
-            } else {
-                backFiles.forEach { it.delete() }
-                Log.w(TAG, "后置未取到有效帧")
-            }
+            if (captureLens(dir, CameraSelector.LENS_FACING_BACK, BACK_BURST, MediaEntity.SOURCE_BACK, "后置", detail)) saved++
 
             if (saved > 0) {
+                captureFailStreak = 0
                 CaptureState.onCaptured()
                 SyncScheduler.requestUpload(this)
+                runCatching { ServiceLocator.settings.setLastError(null) }
             } else {
+                // 连续多轮取不到照片，说明相机实例可能已经卡死，重建一次
+                captureFailStreak++
+                if (captureFailStreak >= 3) {
+                    Log.w(TAG, "连续 $captureFailStreak 轮无照片，重置相机实例")
+                    runCatching { cameraManager.reset() }
+                    captureFailStreak = 0
+                }
                 CaptureState.setStatus("本轮完成")
+                val msg = "本轮未取到照片：$detail"
+                Log.w(TAG, msg)
+                runCatching { ServiceLocator.settings.setLastError(msg) }
             }
         } catch (c: kotlinx.coroutines.CancellationException) {
             throw c
         } catch (t: Throwable) {
             Log.e(TAG, "拍摄会话异常", t)
             CaptureState.setStatus("本轮异常")
+            runCatching { ServiceLocator.settings.setLastError("拍摄异常：${t.javaClass.simpleName} ${t.message}") }
         } finally {
+            runCatching { wakeLock?.release() }
             shotQueue.release()
         }
     }
+
+    /**
+     * 拍一个镜头：失败自动重试一次，最多两轮。
+     * 单轮内某台机型回调不来也没关系——CameraCaptureManager 里有 8s 超时兜底。
+     */
+    private suspend fun captureLens(
+        dir: File,
+        facing: Int,
+        count: Int,
+        source: String,
+        label: String,
+        detail: StringBuilder,
+    ): Boolean {
+        repeat(2) { attempt ->
+            val files = cameraManager.captureBurst(facing, dir, count)
+            val best = pickBestFrame(files)
+            if (best != null) {
+                files.filter { it != best }.forEach { it.delete() }
+                if (ServiceLocator.repository.saveCapture(best, source) != null) return true
+                best.delete()
+                detail.append("$label:入库失败;")
+            } else {
+                files.forEach { it.delete() }
+                detail.append("$label:无有效帧(第${attempt + 1}次);")
+            }
+            if (attempt == 0) delay(RETRY_DELAY_MS)
+        }
+        return false
+    }
+
+    /** 拍摄期间持有短时唤醒锁，避免息屏瞬间 CPU 休眠导致回调丢失 */
+    private fun acquireCaptureWakeLock(): android.os.PowerManager.WakeLock? = runCatching {
+        val pm = getSystemService(android.os.PowerManager::class.java) ?: return null
+        pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "AutoShot:capture").apply {
+            setReferenceCounted(false)
+            acquire(WAKE_LOCK_TIMEOUT_MS)
+        }
+    }.getOrNull()
 
     /** 连拍帧择优：取 Laplacian 清晰度最高的一帧 */
     private suspend fun pickBestFrame(files: List<File>): File? {
@@ -289,6 +337,8 @@ class CaptureService : Service(), LifecycleOwner {
         private const val SCORE_DIM = 240
         private const val SWITCH_DELAY_MS = 250L
         private const val TICK_MS = 500L
+        private const val RETRY_DELAY_MS = 1_200L
+        private const val WAKE_LOCK_TIMEOUT_MS = 120_000L
 
         fun start(context: Context) {
             startWithAction(context, ACTION_START)

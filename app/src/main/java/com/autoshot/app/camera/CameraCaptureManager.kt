@@ -25,6 +25,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.concurrent.Executors
 import kotlin.coroutines.resume
@@ -61,7 +63,9 @@ class CameraCaptureManager(
         private set
 
     private suspend fun getProvider(): ProcessCameraProvider = withContext(Dispatchers.IO) {
-        provider ?: ProcessCameraProvider.getInstance(context).get().also { provider = it }
+        provider ?: withTimeoutOrNull(PROVIDER_TIMEOUT_MS) {
+            ProcessCameraProvider.getInstance(context).get()
+        }?.also { provider = it } ?: throw IllegalStateException("相机服务初始化超时")
     }
 
     private fun currentRotation(): Int {
@@ -105,9 +109,11 @@ class CameraCaptureManager(
         val analysis = buildAnalysis(rotation)
 
         try {
-            withContext(Dispatchers.Main) {
-                p.unbindAll()
-                p.bindToLifecycle(lifecycleOwner, selector, imageCapture, analysis)
+            // 绑定时上层也许有别的应用占着相机，加超时并做一次降级重试
+            val bound = bindWithFallback(p, selector, imageCapture, analysis)
+            if (!bound) {
+                Log.e(TAG, "绑定相机失败 lensFacing=$lensFacing")
+                return@withLock emptyList()
             }
 
             waitForConvergence()
@@ -115,11 +121,14 @@ class CameraCaptureManager(
             val files = ArrayList<File>(count)
             for (index in 0 until count) {
                 val file = File(dir, "cap_${lensFacing}_${System.currentTimeMillis()}_$index.jpg")
-                try {
-                    takePicture(imageCapture, file)
+                // 单张超时：部分机型回调可能永不触发，不设上限会把 Mutex 永久占死
+                val ok = runCatching {
+                    withTimeout(SHOT_TIMEOUT_MS) { takePicture(imageCapture, file) }
+                }
+                if (ok.isSuccess && file.exists() && file.length() > 0) {
                     files += file
-                } catch (e: ImageCaptureException) {
-                    Log.w(TAG, "拍摄失败 lensFacing=$lensFacing code=${e.imageCaptureError}", e)
+                } else {
+                    Log.w(TAG, "拍摄失败或超时 lensFacing=$lensFacing idx=$index：${ok.exceptionOrNull()?.message}")
                     file.delete()
                 }
                 if (index < count - 1) delay(BURST_GAP_MS)
@@ -142,6 +151,46 @@ class CameraCaptureManager(
 
     suspend fun captureOne(lensFacing: Int, dir: File): File? =
         captureBurst(lensFacing, dir, 1).firstOrNull()
+
+    /**
+     * 绑定相机：先用 ImageCapture + ImageAnalysis；失败则降级为只绑 ImageCapture。
+     * 低端机/某些 ROM 上同时绑两路 use case 会直接抛异常，降级后通常能出图。
+     */
+    private suspend fun bindWithFallback(
+        p: ProcessCameraProvider,
+        selector: CameraSelector,
+        imageCapture: ImageCapture,
+        analysis: ImageAnalysis,
+    ): Boolean {
+        val ok = withTimeoutOrNull(BIND_TIMEOUT_MS) {
+            runCatching {
+                withContext(Dispatchers.Main) {
+                    p.unbindAll()
+                    p.bindToLifecycle(lifecycleOwner, selector, imageCapture, analysis)
+                }
+            }.isSuccess
+        } ?: false
+        if (ok) return true
+
+        Log.w(TAG, "常规绑定失败，降级为仅 ImageCapture")
+        runCatching { analysis.clearAnalyzer() }
+        analyzer = null
+        return withTimeoutOrNull(BIND_TIMEOUT_MS) {
+            runCatching {
+                withContext(Dispatchers.Main) {
+                    p.unbindAll()
+                    p.bindToLifecycle(lifecycleOwner, selector, imageCapture)
+                }
+            }.isSuccess
+        } ?: false
+    }
+
+    /** 相机彻底卡死时丢弃 provider，下一轮重新拿一个实例 */
+    fun reset() {
+        runCatching { provider?.unbindAll() }
+        provider = null
+        analyzer = null
+    }
 
     /** 等分析器产出几帧，让 AE/AWB 收敛；最多 600ms，绝不无限等 */
     private suspend fun waitForConvergence() {
@@ -249,5 +298,14 @@ class CameraCaptureManager(
     companion object {
         private const val TAG = "CameraCapture"
         private const val BURST_GAP_MS = 120L
+
+        /** 相机服务初始化上限：个别 ROM 首次初始化要 3~5s，超时后放弃本轮 */
+        private const val PROVIDER_TIMEOUT_MS = 8_000L
+
+        /** 绑定上限：被其它应用占用时会一直等，必须设限 */
+        private const val BIND_TIMEOUT_MS = 5_000L
+
+        /** 单张拍摄上限：回调永不触发的机型靠这个兜底，避免 Mutex 死锁 */
+        private const val SHOT_TIMEOUT_MS = 8_000L
     }
 }

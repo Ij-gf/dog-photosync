@@ -50,8 +50,10 @@ android {
             }
         }
         release {
+            // 关闭 R8 全量优化：实测开启后应用能拍摄但数据写不进库（Room/反射相关被裁），
+            // 与 debug 行为不一致。可靠性优先，体积靠 ABI 过滤控制。
             optimization {
-                enable = true
+                enable = false
             }
             // Release 只打 arm64（手机全都是），x86/x86_64 是模拟器用的，白占 ~19MB；debug 保持全 ABI 以便模拟器调试
             ndk {
@@ -117,21 +119,13 @@ dependencies {
     // ---------- Room ----------
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
-    implementation(libs.androidx.room.paging)
     ksp(libs.androidx.room.compiler)
-
-    // ---------- Paging ----------
-    implementation(libs.androidx.paging.runtime)
-    implementation(libs.androidx.paging.compose)
 
     // ---------- 配置存储 ----------
     implementation(libs.androidx.datastore.preferences)
 
     // ---------- 后台任务 ----------
     implementation(libs.androidx.work.runtime)
-
-    // ---------- 图片加载 ----------
-    implementation(libs.coil.compose)
 
     // ---------- 网络 ----------
     implementation(libs.okhttp)

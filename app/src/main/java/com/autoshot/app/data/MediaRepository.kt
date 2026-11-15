@@ -1,10 +1,8 @@
 package com.autoshot.app.data
 
-import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import com.autoshot.app.data.db.MediaDao
@@ -79,9 +77,7 @@ class MediaRepository(
         bitmap.recycle()
         file.delete()
 
-        // 同时导出一份到系统相册（DCIM/AutoShot），这样手机「相册」里能看到拍摄的照片
-        val galleryUri = exportToGallery(jpeg, "AutoShot_${source}_$capturedAt.jpg")
-
+        // 不再写入系统相册：照片只留在应用私有目录与数据库里
         val entity = MediaEntity(
             id = id,
             source = source,
@@ -92,7 +88,7 @@ class MediaRepository(
             capturedAt = capturedAt,
             synced = false,
             thumbPath = thumbFile.absolutePath,
-            uri = galleryUri,
+            uri = null,
             sizeBytes = jpeg.size.toLong(),
             sha1 = ImageUtils.sha1Hex(jpeg),
             dedupeKey = "cap:$source:$capturedAt:$id",
@@ -116,49 +112,6 @@ class MediaRepository(
             if (square !== bitmap) square.recycle()
             settings.setAvatarPath(out.absolutePath)
         }.onFailure { Log.w(TAG, "更新头像失败", it) }
-    }
-
-    /**
-     * 把 JPEG 写入系统相册 DCIM/AutoShot，返回 MediaStore uri。
-     * Android 10+ 用 RELATIVE_PATH + IS_PENDING，全程不需要存储权限。
-     */
-    private fun exportToGallery(jpeg: ByteArray, displayName: String): String? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            Log.w(TAG, "系统版本低于 Android 10，不导出到相册")
-            return null
-        }
-        val resolver = context.contentResolver
-        return try {
-            val values = ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
-                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                put(
-                    MediaStore.Images.Media.RELATIVE_PATH,
-                    Environment.DIRECTORY_DCIM + "/AutoShot"
-                )
-                put(MediaStore.Images.Media.IS_PENDING, 1)
-            }
-            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-            if (uri == null) {
-                Log.e(TAG, "导出失败：MediaStore.insert 返回 null")
-                return null
-            }
-            val out = resolver.openOutputStream(uri)
-            if (out == null) {
-                Log.e(TAG, "导出失败：openOutputStream 返回 null")
-                resolver.delete(uri, null, null)
-                return null
-            }
-            out.use { it.write(jpeg) }
-            values.clear()
-            values.put(MediaStore.Images.Media.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
-            Log.i(TAG, "已导出到相册: $uri")
-            uri.toString()
-        } catch (t: Throwable) {
-            Log.e(TAG, "导出到系统相册异常", t)
-            null
-        }
     }
 
     // ---------------- 相册扫描 ----------------
@@ -261,9 +214,6 @@ class MediaRepository(
     ): Boolean {
         if (size <= 0L || size > MAX_ALBUM_BYTES) return false
         if (!mime.startsWith("image/")) return false
-
-        // 我们自己导出的拍摄照片也会出现在相册里，按 uri 跳过，避免产生重复记录
-        if (dao.existsByUri(uri.toString())) return false
 
         val dedupeKey = "album:${bucketId ?: "0"}:$dateAddedSec:$size"
         if (dao.exists(dedupeKey)) return false
